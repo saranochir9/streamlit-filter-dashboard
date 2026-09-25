@@ -7,14 +7,19 @@ import os
 import uuid
 
 st.set_page_config(
-    page_title="Filter Replacement Dashboard",
+    page_title="TEST VERSION 999",
     page_icon="📦",
     layout="wide"
 )
 
+st.title("TEST VERSION 999")
+st.stop()
+
 RECORDS_FILE = "filter_records.csv"
 
-# ---------- Create File ----------
+# ==========================
+# CREATE FILE IF NOT EXISTS
+# ==========================
 
 if not os.path.exists(RECORDS_FILE):
     pd.DataFrame(columns=[
@@ -25,80 +30,83 @@ if not os.path.exists(RECORDS_FILE):
         "Filter Type",
         "Interval Days",
         "Date Changed",
-        "Next Due",
-        "Days Remaining",
-        "Status",
         "Changed By",
         "Remarks"
     ]).to_csv(RECORDS_FILE, index=False)
 
-# ---------- Load ----------
+# ==========================
+# LOAD DATA
+# ==========================
 
 df = pd.read_csv(RECORDS_FILE)
+st.write("Columns:")
+st.write(df.columns.tolist())
 
-# ---------- Status Calculation ----------
+st.write(df.head())
 
-def calculate_status(row):
-    try:
-        changed = pd.to_datetime(row["Date Changed"])
-
-        next_due = changed + timedelta(days=int(row["Interval Days"]))
-        days_remaining = (next_due.date() - datetime.today().date()).days
-
-        if days_remaining < 0:
-            status = "Overdue"
-        elif days_remaining <= 30:
-            status = "Due Soon"
-        else:
-            status = "Healthy"
-
-        return pd.Series([
-            next_due.date(),
-            days_remaining,
-            status
-        ])
-
-    except:
-        return pd.Series([None, None, None])
+st.stop()
+# ==========================
+# CALCULATE STATUS
+# ==========================
 
 if len(df) > 0:
-    df[["Next Due","Days Remaining","Status"]] = df.apply(
-        calculate_status,
-        axis=1
+
+    df["Date Changed"] = pd.to_datetime(
+        df["Date Changed"],
+        errors="coerce"
     )
 
-# ---------- Theme ----------
+    df["Next Due"] = (
+        df["Date Changed"] +
+        pd.to_timedelta(df["Interval Days"], unit="D")
+    )
 
-st.markdown("""
-<style>
+    df["Days Remaining"] = (
+        df["Next Due"].dt.date -
+        datetime.today().date()
+    )
 
-.main{
-background-color:#0f172a;
-}
+    df["Days Remaining"] = df["Days Remaining"].apply(
+        lambda x: x.days if pd.notna(x) else None
+    )
 
-.card{
-padding:20px;
-border-radius:15px;
-text-align:center;
-background:#1e293b;
-color:white;
-box-shadow:0px 0px 10px rgba(0,255,255,0.2);
-}
+    def get_status(days):
 
-</style>
-""", unsafe_allow_html=True)
+        if pd.isna(days):
+            return "Unknown"
 
-# ---------- Tabs ----------
+        if days < 0:
+            return "Overdue"
+
+        elif days <= 30:
+            return "Due Soon"
+
+        else:
+            return "Healthy"
+
+    df["Status"] = df["Days Remaining"].apply(
+        get_status
+    )
+
+else:
+
+    df["Next Due"] = ""
+    df["Days Remaining"] = ""
+    df["Status"] = ""
+
+# ==========================
+# TABS
+# ==========================
 
 tab1, tab2, tab3 = st.tabs([
     "📊 Dashboard",
-    "📝 Records",
+    "📋 Records",
     "➕ Add Record"
 ])
 
-# ==================================
+# ==========================
 # DASHBOARD
-# ==================================
+# ==========================
 
 with tab1:
 
@@ -107,153 +115,164 @@ with tab1:
     total = len(df)
 
     overdue = len(df[df["Status"] == "Overdue"])
-    due = len(df[df["Status"] == "Due Soon"])
+    due_soon = len(df[df["Status"] == "Due Soon"])
     healthy = len(df[df["Status"] == "Healthy"])
 
-    c1,c2,c3,c4 = st.columns(4)
+    c1, c2, c3, c4 = st.columns(4)
 
     c1.metric("Total Filters", total)
     c2.metric("Healthy", healthy)
-    c3.metric("Due Soon", due)
+    c3.metric("Due Soon", due_soon)
     c4.metric("Overdue", overdue)
 
     st.divider()
 
-    left,right = st.columns(2)
+    left, right = st.columns(2)
 
-    status_count = (
-        df["Status"]
-        .value_counts()
-        .reset_index()
-    )
+    if total > 0:
 
-    status_count.columns=[
-        "Status",
-        "Count"
-    ]
+        status_df = (
+            df["Status"]
+            .value_counts()
+            .reset_index()
+        )
 
-    if len(status_count) > 0:
+        status_df.columns = [
+            "Status",
+            "Count"
+        ]
 
         fig1 = px.pie(
-            status_count,
+            status_df,
             names="Status",
             values="Count",
             hole=0.5,
             title="Filter Health"
         )
 
-        left.plotly_chart(fig1, use_container_width=True)
+        left.plotly_chart(
+            fig1,
+            use_container_width=True
+        )
 
-    if len(df) > 0:
-
-        team_count = (
+        team_df = (
             df.groupby("Team")
             .size()
             .reset_index(name="Count")
         )
 
         fig2 = px.bar(
-            team_count,
+            team_df,
             x="Team",
             y="Count",
             title="Filters by Team"
         )
 
-        right.plotly_chart(fig2, use_container_width=True)
+        right.plotly_chart(
+            fig2,
+            use_container_width=True
+        )
 
-# ==================================
+# ==========================
 # RECORDS
-# ==================================
+# ==========================
 
 with tab2:
 
     st.subheader("Filter Records")
 
-    c1,c2,c3 = st.columns(3)
+    c1, c2, c3 = st.columns(3)
 
-    teams = ["All"] + sorted(df["Team"].dropna().unique().tolist())
-    team = c1.selectbox(
+    teams = ["All"] + sorted(
+        df["Team"].dropna().unique().tolist()
+    )
+
+    selected_team = c1.selectbox(
         "Team",
         teams
     )
 
-    temp = df.copy()
+    filtered = df.copy()
 
-    if team != "All":
-        temp = temp[
-            temp["Team"] == team
+    if selected_team != "All":
+        filtered = filtered[
+            filtered["Team"] == selected_team
         ]
 
     areas = ["All"] + sorted(
-        temp["Area"].dropna().unique().tolist()
+        filtered["Area"].dropna().unique().tolist()
     )
 
-    area = c2.selectbox(
+    selected_area = c2.selectbox(
         "Area",
         areas
     )
 
-    status = c3.selectbox(
+    selected_status = c3.selectbox(
         "Status",
-        ["All","Healthy","Due Soon","Overdue"]
+        [
+            "All",
+            "Healthy",
+            "Due Soon",
+            "Overdue"
+        ]
     )
 
-    if area != "All":
-        temp = temp[
-            temp["Area"] == area
+    if selected_area != "All":
+        filtered = filtered[
+            filtered["Area"] == selected_area
         ]
 
-    if status != "All":
-        temp = temp[
-            temp["Status"] == status
+    if selected_status != "All":
+        filtered = filtered[
+            filtered["Status"] == selected_status
         ]
 
-    gb = GridOptionsBuilder.from_dataframe(temp)
+    gb = GridOptionsBuilder.from_dataframe(
+        filtered
+    )
 
     gb.configure_selection(
-        selection_mode="multiple",
+        "multiple",
         use_checkbox=True
     )
 
     gb.configure_default_column(
         editable=True,
-        filter=True,
-        sortable=True
+        sortable=True,
+        filter=True
     )
 
     grid = AgGrid(
-        temp,
-        height=500,
+        filtered,
         gridOptions=gb.build(),
+        height=500,
         update_mode=GridUpdateMode.MODEL_CHANGED
     )
 
-    st.divider()
-
-    col1,col2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
     if col1.button("💾 Save Changes"):
 
-        save_df = pd.DataFrame(
+        pd.DataFrame(
             grid["data"]
-        )
-
-        save_df.to_csv(
+        ).to_csv(
             RECORDS_FILE,
             index=False
         )
 
-        st.success("Changes Saved")
+        st.success("Saved")
+        st.rerun()
 
-    selected = pd.DataFrame(
+    selected_rows = pd.DataFrame(
         grid["selected_rows"]
     )
 
     if col2.button("❌ Delete Selected"):
 
-        if len(selected) > 0:
+        if len(selected_rows) > 0:
 
-            ids = selected["ID"].tolist()
+            ids = selected_rows["ID"].tolist()
 
             remaining = df[
                 ~df["ID"].isin(ids)
@@ -265,12 +284,11 @@ with tab2:
             )
 
             st.success("Deleted")
-
             st.rerun()
 
-# ==================================
+# ==========================
 # ADD RECORD
-# ==================================
+# ==========================
 
 with tab3:
 
@@ -285,7 +303,7 @@ with tab3:
     if "last_changed_by" not in st.session_state:
         st.session_state.last_changed_by = ""
 
-    c1,c2,c3 = st.columns(3)
+    c1, c2, c3 = st.columns(3)
 
     team = c1.text_input(
         "Team",
@@ -302,7 +320,7 @@ with tab3:
         st.session_state.last_changed_by
     )
 
-    c4,c5,c6 = st.columns(3)
+    c4, c5, c6 = st.columns(3)
 
     tag = c4.text_input("Tag")
 
@@ -326,27 +344,32 @@ with tab3:
 
     if st.button("➕ Add Record"):
 
-        new = pd.DataFrame([{
-
-            "ID":str(uuid.uuid4())[:8],
-
-            "Team":team,
-            "Area":area,
-            "Tag":tag,
-            "Filter Type":filter_type,
-            "Interval Days":interval,
-            "Date Changed":date_changed,
-            "Changed By":changed_by,
-            "Remarks":remarks
-
+        new_row = pd.DataFrame([{
+            "ID": str(uuid.uuid4())[:8],
+            "Team": team,
+            "Area": area,
+            "Tag": tag,
+            "Filter Type": filter_type,
+            "Interval Days": interval,
+            "Date Changed": date_changed,
+            "Changed By": changed_by,
+            "Remarks": remarks
         }])
 
-        df2 = pd.concat(
-            [df,new],
+        save_df = pd.concat(
+            [df.drop(
+                columns=[
+                    "Next Due",
+                    "Days Remaining",
+                    "Status"
+                ],
+                errors="ignore"
+            ),
+            new_row],
             ignore_index=True
         )
 
-        df2.to_csv(
+        save_df.to_csv(
             RECORDS_FILE,
             index=False
         )
@@ -356,5 +379,4 @@ with tab3:
         st.session_state.last_changed_by = changed_by
 
         st.success("Record Added")
-
         st.rerun()
